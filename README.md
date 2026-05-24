@@ -9,9 +9,11 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Executive Summary
-This project is a high-fidelity quantitative finance engine designed to optimize equity portfolios using **Modern Portfolio Theory (MPT)** and project future performance via **Monte Carlo simulations**. Targeting the Indonesia Stock Exchange (IDX), it fetches real-market data for 10 blue-chip tickers, computes optimal asset allocations (Maximum Sharpe and Minimum Variance), and models the range of future outcomes using **Geometric Brownian Motion (GBM)** with rigorous **Itô's Lemma** drift correction. 
+This repository presents a high-fidelity quantitative finance engine engineered to optimize equity portfolios utilizing **Modern Portfolio Theory (MPT)** and to project future risk profiles via **Monte Carlo simulations**. Targeting the Indonesia Stock Exchange (IDX), the system ingests empirical market data for 10 high-capitalization assets, computing optimal allocation vectors (Maximum Sharpe and Minimum Variance). Furthermore, it models the distribution of future outcomes applying **Geometric Brownian Motion (GBM)** with rigorous **Itô's Lemma** drift corrections.
 
-It demonstrates proficiency in numerical optimization, stochastic modeling, and professional software engineering standards suitable for Quantitative and Data Analyst roles at top-tier financial institutions.
+The architecture is extended to include institutional-grade frameworks, specifically **Risk Parity** algorithms and the **Black-Litterman** model, to mitigate the structural sensitivities inherent in standard mean-variance optimization. Comprehensive out-of-sample backtesting underscores the necessity for dynamic rebalancing in shifting macroeconomic regimes.
+
+This engine demonstrates advanced proficiency in numerical optimization, stochastic calculus, and robust software engineering.
 
 ## Visual Output Preview
 
@@ -97,6 +99,8 @@ project/
 | `01_data_and_eda` | Market Context | Correlation Heatmaps & Return Distributions |
 | `02_optimization` | Allocation | Efficient Frontier & Optimal Weight Bars |
 | `03_monte_carlo` | Risk/Projection | GBM Path Projections & 1Y VaR/CVaR |
+| `04_backtesting` | Out-of-Sample Validation | Walk-Forward Analysis & Realized Metrics |
+| `05_advanced_allocations` | Advanced Models | Risk Parity Contributions & Black-Litterman Posteriors |
 
 ## Quickstart
 
@@ -115,20 +119,25 @@ jupyter lab
 ```
 *Run notebooks in order: 01 → 02 → 03.*
 
+# 3. Launch Live Real-Time Dashboard
+```bash
+streamlit run src/live_dashboard.py
+```
+*Allows custom ticker selection and real-time optimization.*
+
 ## Data Sources
 The project uses **yfinance** to fetch Adjusted Close prices for 10 IDX blue-chips:
 - **Financials:** BBCA.JK, BBRI.JK, BMRI.JK
 - **Telecom:** TLKM.JK, EXCL.JK
 - **Consumer/Healthcare:** UNVR.JK, ICBP.JK, INDF.JK, KLBF.JK, ASII.JK
 
-## Extending This Project
+## Advanced Quantitative Features
 - **Short Selling:** Set `allow_short=True` in `EfficientFrontier` to explore the unconstrained frontier.
-- **Black-Litterman:** Incorporate subjective market views to adjust the equilibrium returns.
-- **GARCH Modeling:** Replace constant volatility with GARCH(1,1) for better volatility clustering.
-- **Transaction Costs:** Add a penalty function to the optimizer to account for rebalancing friction.
-- **Dash Integration:** Wrap `plots.py` in a Streamlit or Dash web app for real-time monitoring.
+- **Black-Litterman Model:** Incorporates subjective market views to adjust equilibrium returns, mitigating extreme allocations.
+- **GARCH(1,1) Volatility Forecasting:** Replaces historical constant volatility with conditional variance to capture volatility clustering.
+- **Transaction Cost Penalty:** Applies L1-norm turnover penalties to the optimization objective to model rebalancing friction.
+- **Risk Parity Allocation:** Optimizes weights to equalize marginal risk contributions across the portfolio.
+- **Live Streamlit Dashboard:** Wraps the entire engine into a real-time web application for dynamic market monitoring.
 
-## Skills Demonstrated
-- **Domain:** Quantitative Finance, Modern Portfolio Theory, Stochastic Calculus (GBM), Risk Management (VaR/CVaR).
-- **Technical:** Python (SciPy, NumPy, Pandas), Numerical Optimization (SLSQP), Monte Carlo Methods, Interactive Data Viz (Plotly).
-- **Engineering:** Unit Testing (pytest), API Integration, Caching, Type Hinting, Google-style Docstrings.
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

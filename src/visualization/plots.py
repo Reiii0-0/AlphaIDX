@@ -19,6 +19,8 @@ __all__ = [
     "plot_return_distribution",
     "plot_weights_bar",
     "plot_cumulative_returns",
+    "plot_backtest_performance",
+    "plot_risk_parity_contributions",
 ]
 
 # ── Color Constants ──
@@ -428,6 +430,77 @@ def plot_cumulative_returns(
         x=port_cum.index[-1], y=final_ret,
         text=f"Total: {final_ret:.1f}%",
         showarrow=True, arrowhead=2, ax=-60, ay=-30
+    )
+
+    return fig
+
+
+def plot_backtest_performance(
+    bt_results: list[dict], benchmark_cum: pd.Series
+) -> go.Figure:
+    """
+    Plot Out-of-Sample realized performance comparison.
+    """
+    fig = go.Figure()
+
+    # Benchmark
+    fig.add_trace(
+        go.Scatter(
+            x=benchmark_cum.index,
+            y=benchmark_cum * 100,
+            mode="lines",
+            line=dict(color="gray", width=2, dash="dash"),
+            name="Benchmark (Equal Weight)",
+        )
+    )
+
+    # Portfolios
+    colors = [COLOR_MAX_SHARPE, COLOR_MIN_VAR]
+    for i, res in enumerate(bt_results):
+        fig.add_trace(
+            go.Scatter(
+                x=res["cumulative_returns"].index,
+                y=res["cumulative_returns"] * 100,
+                mode="lines",
+                line=dict(color=colors[i % len(colors)], width=3),
+                name=f"Realized: {res['label']}",
+            )
+        )
+
+    fig.update_layout(
+        title="Out-of-Sample Backtest: Realized Cumulative Performance (2025-2026)",
+        xaxis_title="Date",
+        yaxis_title="Cumulative Return (%)",
+        template=TEMPLATE,
+        hovermode="x unified",
+    )
+
+    return fig
+
+def plot_risk_parity_contributions(risk_contributions: dict, tickers: list[str]) -> go.Figure:
+    """
+    Plot Risk Contributions of a portfolio.
+    """
+    clean_tickers = [t.replace(".JK", "") for t in tickers]
+    rc_values = [risk_contributions[t] * 100 for t in tickers]
+    
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=clean_tickers,
+                y=rc_values,
+                marker_color="#8B5CF6", # Purple
+                text=[f"{v:.1f}%" for v in rc_values],
+                textposition="auto",
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title="Marginal Risk Contributions (Risk Parity)",
+        xaxis_title="Ticker",
+        yaxis_title="Risk Contribution (%)",
+        template=TEMPLATE
     )
 
     return fig

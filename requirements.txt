@@ -10,3 +10,9 @@ pytest==7.4.0
 black==23.0.0
 ruff==0.1.0
 nbformat==5.9.0
+matplotlib==3.10.9
+streamlit==1.57.0
+altair==6.1.0
+pyarrow==24.0.0
+arch==8.0.0
+statsmodels==0.14.6

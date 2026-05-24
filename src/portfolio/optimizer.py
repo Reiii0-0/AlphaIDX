@@ -72,9 +72,13 @@ class EfficientFrontier:
         """Equal weights initial guess."""
         return np.array([1.0 / self.n_assets] * self.n_assets)
 
-    def optimize_max_sharpe(self) -> dict:
+    def optimize_max_sharpe(self, current_weights: np.ndarray | None = None, transaction_cost: float = 0.0) -> dict:
         """
-        Maximize Sharpe ratio (minimize negative Sharpe).
+        Maximize Sharpe ratio (minimize negative Sharpe), optionally accounting for transaction costs.
+
+        Args:
+            current_weights (np.ndarray | None): Current portfolio weights for turnover calculation.
+            transaction_cost (float): Proportional transaction cost per unit of turnover (e.g., 0.001 for 10 bps).
 
         Returns:
             dict: Portfolio metrics and weights.
@@ -82,6 +86,9 @@ class EfficientFrontier:
 
         def neg_sharpe(w):
             ret = portfolio_return(w, self.mean_returns)
+            if current_weights is not None and transaction_cost > 0:
+                turnover = np.sum(np.abs(w - current_weights))
+                ret -= transaction_cost * turnover
             vol = portfolio_volatility(w, self.cov_matrix)
             return -sharpe_ratio(ret, vol, self.rf)
 
