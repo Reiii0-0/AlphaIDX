@@ -10,10 +10,12 @@ All constants follow industry standards:
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from dotenv import load_dotenv
 from scipy.stats import norm
+from scipy.stats import t as student_t
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,6 @@ def portfolio_return(weights: np.ndarray, mean_returns: np.ndarray) -> float:
         raise ValueError(
             f"Weights {weights.shape} and mean_returns {mean_returns.shape} shapes incompatible."
         )
-    # E[R_p] = w^T · μ
     return float(np.dot(weights, mean_returns))
 
 
@@ -118,25 +119,15 @@ def portfolio_volatility(weights: np.ndarray, cov_matrix: np.ndarray) -> float:
         raise ValueError(
             f"Weights {weights.shape} and cov_matrix {cov_matrix.shape} shapes incompatible."
         )
-    # σ_p = sqrt(w^T · Σ · w)
     return float(np.sqrt(weights.T @ cov_matrix @ weights))
 
 
 def sharpe_ratio(ret: float, vol: float, rf: float = RISK_FREE_RATE_ANNUAL) -> float:
     """
     Compute the Sharpe ratio.
-
-    Args:
-        ret (float): Annualized portfolio return.
-        vol (float): Annualized portfolio volatility.
-        rf (float): Annualized risk-free rate. Defaults to RISK_FREE_RATE_ANNUAL.
-
-    Returns:
-        float: Sharpe ratio. Returns 0.0 if vol is 0.
     """
     if vol == 0:
         return 0.0
-    # S = (E[R_p] - R_f) / σ_p
     return (ret - rf) / vol
 
 
@@ -146,29 +137,25 @@ def portfolio_var(
     cov_matrix: np.ndarray,
     confidence: float = 0.95,
     horizon_days: int = 1,
+    dist: Literal["normal", "t"] = "normal",
+    df: float = 4.0,
 ) -> float:
     """
-    Parametric Value at Risk (VaR) under normal distribution assumption.
-
-    Args:
-        weights (np.ndarray): Portfolio weights, shape (n,).
-        mean_returns (np.ndarray): Annualized mean returns, shape (n,).
-        cov_matrix (np.ndarray): Annualized covariance matrix, shape (n, n).
-        confidence (float): Confidence level (e.g., 0.95).
-        horizon_days (int): Time horizon in trading days.
-
-    Returns:
-        float: Positive number representing the loss at the given confidence level.
+    Parametric Value at Risk (VaR) under normal or fat-tailed Student-t assumption.
     """
-    # h = horizon in days as fraction of year
     h = horizon_days / TRADING_DAYS_PER_YEAR
     mu_p = portfolio_return(weights, mean_returns)
     sig_p = portfolio_volatility(weights, cov_matrix)
-    # z = α-quantile of standard normal
-    z = norm.ppf(1 - confidence)
-    # VaR_α = -(μ_p · h + z_α · σ_p · √h)
-    var = -(mu_p * h + z * sig_p * np.sqrt(h))
-    return float(var)
+    if dist == "t":
+        if df <= 2.0:
+            raise ValueError("Student-t degrees of freedom (df) must be > 2.0.")
+        scale = sig_p * np.sqrt(h * (df - 2.0) / df)
+        q = student_t.ppf(1.0 - confidence, df)
+        return float(-(mu_p * h + q * scale))
+    if dist != "normal":
+        raise ValueError(f"Unsupported distribution: {dist}")
+    z = norm.ppf(1.0 - confidence)
+    return float(-(mu_p * h + z * sig_p * np.sqrt(h)))
 
 
 def portfolio_cvar(
@@ -176,26 +163,27 @@ def portfolio_cvar(
     mean_returns: np.ndarray,
     cov_matrix: np.ndarray,
     confidence: float = 0.95,
+    dist: Literal["normal", "t"] = "normal",
+    df: float = 4.0,
 ) -> float:
     """
-    Parametric Conditional VaR (Expected Shortfall) under normal assumption.
-
-    Args:
-        weights (np.ndarray): Portfolio weights, shape (n,).
-        mean_returns (np.ndarray): Annualized mean returns, shape (n,).
-        cov_matrix (np.ndarray): Annualized covariance matrix, shape (n, n).
-        confidence (float): Confidence level (e.g., 0.95).
-
-    Returns:
-        float: Positive number representing the expected loss beyond VaR.
+    Parametric Conditional VaR (Expected Shortfall) under normal or Student-t assumption.
     """
-    h = 1 / TRADING_DAYS_PER_YEAR
+    h = 1.0 / TRADING_DAYS_PER_YEAR
     mu_p = portfolio_return(weights, mean_returns)
     sig_p = portfolio_volatility(weights, cov_matrix)
-    z = norm.ppf(1 - confidence)
-    # CVaR_α = -μ_p · h + σ_p · √h · φ(z_α) / (1 - α)
-    cvar = -mu_p * h + sig_p * np.sqrt(h) * norm.pdf(z) / (1 - confidence)
-    return float(cvar)
+    alpha = 1.0 - confidence
+    if dist == "t":
+        if df <= 2.0:
+            raise ValueError("Student-t degrees of freedom (df) must be > 2.0.")
+        scale = sig_p * np.sqrt(h * (df - 2.0) / df)
+        q = student_t.ppf(alpha, df)
+        tail_factor = (student_t.pdf(q, df) / alpha) * ((df + q**2) / (df - 1.0))
+        return float(-mu_p * h + scale * tail_factor)
+    if dist != "normal":
+        raise ValueError(f"Unsupported distribution: {dist}")
+    z = norm.ppf(alpha)
+    return float(-mu_p * h + sig_p * np.sqrt(h) * norm.pdf(z) / alpha)
 
 
 def max_drawdown(cumulative_returns: np.ndarray) -> float:

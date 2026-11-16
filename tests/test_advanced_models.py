@@ -1,6 +1,11 @@
 import numpy as np
+import pandas as pd
 
-from src.portfolio.advanced_models import BlackLittermanModel, RiskParityOptimizer
+from src.portfolio.advanced_models import (
+    BlackLittermanModel,
+    HierarchicalRiskParityOptimizer,
+    RiskParityOptimizer,
+)
 
 
 def test_risk_parity_equal_volatility():
@@ -84,3 +89,25 @@ def test_black_litterman_singular_covariance():
     post = bl.posterior_returns(P, Q)
     assert np.all(np.isfinite(post))
     assert post[0] > 0.10
+
+
+def test_hierarchical_risk_parity_clusters_correlated_assets():
+    rng = np.random.default_rng(42)
+    n = 500
+    factor_1 = rng.normal(0.0, 0.01, size=n)
+    factor_2 = rng.normal(0.0, 0.01, size=n)
+    # A1 and A2 are nearly identical (same cluster); B is independent with same volatility.
+    a1 = factor_1 + rng.normal(0.0, 0.001, size=n)
+    a2 = factor_1 + rng.normal(0.0, 0.001, size=n)
+    b = factor_2 + rng.normal(0.0, 0.001, size=n)
+    df = pd.DataFrame({"A1": a1, "A2": a2, "B": b})
+
+    hrp = HierarchicalRiskParityOptimizer(df).optimize()
+    weights = hrp["weights"]
+
+    assert np.isclose(sum(weights.values()), 1.0)
+    assert hrp["volatility"] > 0.0
+    assert len(hrp["cluster_order"]) == 3
+    # HRP splits cluster weight between A1 and A2, giving B significantly more weight than A1 or A2 individually.
+    assert weights["B"] > weights["A1"]
+    assert weights["B"] > weights["A2"]

@@ -5,13 +5,17 @@ Advanced Portfolio Allocation Models: Risk Parity and Black-Litterman.
 import logging
 
 import numpy as np
+import pandas as pd
+from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.optimize import minimize
+from scipy.spatial.distance import squareform
 
 from src.portfolio.metrics import OptimizationError, portfolio_volatility
+from src.portfolio.optimizer import ledoit_wolf_shrinkage
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["RiskParityOptimizer", "BlackLittermanModel"]
+__all__ = ["RiskParityOptimizer", "BlackLittermanModel", "HierarchicalRiskParityOptimizer"]
 
 
 class RiskParityOptimizer:
@@ -73,6 +77,71 @@ class RiskParityOptimizer:
             "weights": dict(zip(self.tickers, weights)),
             "volatility": vol,
             "risk_contributions": dict(zip(self.tickers, rc_pct)),
+        }
+
+
+class HierarchicalRiskParityOptimizer:
+    """
+    Hierarchical Risk Parity (HRP) allocator via correlation tree clustering and recursive bisection.
+    """
+
+    def __init__(
+        self,
+        log_returns: pd.DataFrame,
+        cov_matrix: np.ndarray | None = None,
+    ) -> None:
+        self.log_returns = log_returns
+        self.tickers = list(log_returns.columns)
+        self.n_assets = len(self.tickers)
+        self.cov_matrix = (
+            np.asarray(cov_matrix, dtype=float)
+            if cov_matrix is not None
+            else ledoit_wolf_shrinkage(log_returns)
+        )
+
+    @staticmethod
+    def _cluster_var(cov: np.ndarray, indices: list[int]) -> float:
+        sub_cov = cov[np.ix_(indices, indices)]
+        diag = np.clip(np.diag(sub_cov), 1e-12, None)
+        inv_diag = 1.0 / diag
+        w = inv_diag / np.sum(inv_diag)
+        return float(w @ sub_cov @ w)
+
+    def optimize(self) -> dict:
+        """Compute HRP weights without inverting the covariance matrix."""
+        corr = np.nan_to_num(self.log_returns.corr().to_numpy(dtype=float), nan=0.0)
+        np.fill_diagonal(corr, 1.0)
+        dist = np.sqrt(np.clip(0.5 * (1.0 - corr), 0.0, 1.0))
+        np.fill_diagonal(dist, 0.0)
+
+        link = linkage(squareform(dist, checks=False), method="single")
+        sort_ix = [int(i) for i in leaves_list(link)]
+
+        weights = pd.Series(1.0, index=sort_ix, dtype=float)
+        clusters = [sort_ix]
+        while clusters:
+            clusters = [
+                c[j:k]
+                for c in clusters
+                for j, k in ((0, len(c) // 2), (len(c) // 2, len(c)))
+                if len(c) > 1
+            ]
+            for i in range(0, len(clusters), 2):
+                c0, c1 = clusters[i], clusters[i + 1]
+                var0 = self._cluster_var(self.cov_matrix, c0)
+                var1 = self._cluster_var(self.cov_matrix, c1)
+                denom = var0 + var1
+                alpha = 1.0 - var0 / denom if denom > 0 else 0.5
+                weights[c0] *= alpha
+                weights[c1] *= 1.0 - alpha
+
+        w_arr = np.round(weights.sort_index().to_numpy(dtype=float), 6)
+        w_arr /= np.sum(w_arr)
+        vol = portfolio_volatility(w_arr, self.cov_matrix)
+        return {
+            "weights": dict(zip(self.tickers, w_arr)),
+            "volatility": vol,
+            "cluster_order": [self.tickers[i] for i in sort_ix],
         }
 
 

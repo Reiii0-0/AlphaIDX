@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alphaidx"
-version = "0.2.0"
+version = "2.1.0"
 description = "Quantitative portfolio optimization, stochastic risk simulation, and walk-forward backtesting for IDX equities."
 readme = "README.md"
 license = { file = "LICENSE" }

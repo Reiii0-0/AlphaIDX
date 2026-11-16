@@ -37,3 +37,11 @@ def test_garch_volatility_forecasting():
 
     assert ann_vol > 0
     assert 0.05 < ann_vol < 0.50  # Reasonable bound for this synthetic data
+
+    model_t = GARCHVolatilityModel(returns_series, dist="t")
+    model_t.fit()
+    ann_vol_t = model_t.forecast_volatility(horizon=10)
+    assert ann_vol_t > 0
+
+    with pytest.raises(ValueError, match="Unsupported GARCH"):
+        GARCHVolatilityModel(returns_series, dist="ged")  # type: ignore[arg-type]

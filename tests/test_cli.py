@@ -55,6 +55,7 @@ def test_cli_dry_run_json(tmp_path, capsys):
         ["run", "--tickers", "BBCA.JK"],
         ["run", "--start", "2024-01-01", "--end", "2024-01-01"],
         ["run", "--oos-start", "2025-01-01"],
+        ["run", "--tickers", "BBCA.JK,BBRI.JK,TLKM.JK", "--max-weight", "0.2"],
         ["backtest", "--end", "2024-12-31", "--oos-start", "2024-06-01", "--oos-end", "2025-06-01"],
     ],
 )
@@ -80,6 +81,10 @@ def test_cli_run_end_to_end_and_idempotent(tmp_path, capsys):
         "2022-01-01",
         "--oos-end",
         "2022-12-31",
+        "--max-weight",
+        "0.5",
+        "--dist",
+        "t",
         "--n-sims",
         "200",
         "--cache-dir",
@@ -97,8 +102,13 @@ def test_cli_run_end_to_end_and_idempotent(tmp_path, capsys):
         payload1 = json.loads(out1)
         assert payload1["command"] == "run"
         assert "max_sharpe" in payload1
+        assert "min_cvar" in payload1
+        assert "hrp" in payload1
+        assert all(w <= 0.5 + 1e-5 for w in payload1["max_sharpe"]["weights"].values())
         assert "oos_backtest" in payload1
         assert "walk_forward_min_variance" in payload1["oos_backtest"]
+        assert "walk_forward_min_cvar" in payload1["oos_backtest"]
+        assert "walk_forward_hrp" in payload1["oos_backtest"]
         assert (out_dir / "summary.json").exists()
         assert (out_dir / "summary.md").exists()
 
@@ -127,6 +137,8 @@ def test_cli_backtest_command(tmp_path, capsys):
         "2022-12-31",
         "--rebalance-freq",
         "63",
+        "--max-weight",
+        "0.5",
         "--cache-dir",
         str(cache_dir),
         "--format",
@@ -138,3 +150,5 @@ def test_cli_backtest_command(tmp_path, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["command"] == "backtest"
     assert payload["results"]["walk_forward_max_sharpe"]["rebalances"] >= 3
+    assert "walk_forward_min_cvar" in payload["results"]
+    assert "walk_forward_hrp" in payload["results"]

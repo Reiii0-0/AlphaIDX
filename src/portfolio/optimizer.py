@@ -71,24 +71,30 @@ class EfficientFrontier:
         cov_method: Literal["sample", "ledoit_wolf"] = "sample",
         mean_returns: np.ndarray | None = None,
         cov_matrix: np.ndarray | None = None,
+        max_weight: float = 1.0,
     ) -> None:
         """
         Initialize the optimizer.
 
         Args:
             log_returns (pd.DataFrame): Daily log returns.
-            allow_short (bool): Whether to allow short selling (-0.5 to 1.0 bounds).
+            allow_short (bool): Whether to allow short selling (-0.5 to max_weight bounds).
             risk_free_rate (float): Annualized risk-free rate.
             cov_method (Literal["sample", "ledoit_wolf"]): Covariance estimator.
             mean_returns (np.ndarray | None): Optional custom annualized mean returns.
             cov_matrix (np.ndarray | None): Optional custom annualized covariance matrix.
+            max_weight (float): Maximum weight per asset in (0, 1], with max_weight * n_assets >= 1.
         """
         self.tickers = list(log_returns.columns)
         self.n_assets = len(self.tickers)
         self.rf = risk_free_rate
         self.allow_short = allow_short
+        if max_weight <= 0.0 or max_weight > 1.0 or max_weight * self.n_assets < 1.0 - 1e-9:
+            raise ValueError(f"max_weight ({max_weight}) must be in [1/{self.n_assets}, 1.0].")
+        self.max_weight = float(max_weight)
+        self._returns_matrix = np.round(log_returns.to_numpy(dtype=float), 12)
 
-        default_mean = log_returns.mean().to_numpy(dtype=float) * TRADING_DAYS_PER_YEAR
+        default_mean = self._returns_matrix.mean(axis=0) * TRADING_DAYS_PER_YEAR
         if cov_method == "ledoit_wolf":
             default_cov = ledoit_wolf_shrinkage(log_returns)
         elif cov_method == "sample":
@@ -101,13 +107,11 @@ class EfficientFrontier:
         self._frontier_cache: list[dict] | None = None
         self.update_estimates(mean_returns=mean_returns, cov_matrix=cov_matrix)
 
-        if allow_short:
-            self.bounds = tuple((-0.5, 1.0) for _ in range(self.n_assets))
-        else:
-            self.bounds = tuple((0.0, 1.0) for _ in range(self.n_assets))
+        lower = -0.5 if allow_short else 0.0
+        self.bounds = tuple((lower, self.max_weight) for _ in range(self.n_assets))
 
         logger.info(
-            f"Initialized EF ({cov_method}) with {self.n_assets} assets. "
+            f"Initialized EF ({cov_method}, max_weight={self.max_weight:.2f}) with {self.n_assets} assets. "
             f"Date range: {log_returns.index[0].date()} to {log_returns.index[-1].date()}. "
             f"Annualized return range: [{self.mean_returns.min():.2%}, {self.mean_returns.max():.2%}]"
         )
@@ -202,8 +206,39 @@ class EfficientFrontier:
 
         return self._format_result(result.x)
 
+    def optimize_min_cvar(self, confidence: float = 0.95) -> dict:
+        """
+        Minimize empirical Conditional Value at Risk (Expected Shortfall).
+        """
+        if not (0.0 < confidence < 1.0):
+            raise ValueError(f"confidence ({confidence}) must be in (0, 1).")
+        alpha_pct = (1.0 - confidence) * 100.0
+
+        def empirical_cvar(w: np.ndarray) -> float:
+            port_rets = self._returns_matrix @ w
+            cutoff = np.percentile(port_rets, alpha_pct)
+            tail = port_rets[port_rets <= cutoff]
+            return float(-tail.mean()) if len(tail) else float(-cutoff)
+
+        result = minimize(
+            empirical_cvar,
+            self._initial_weights(),
+            method="SLSQP",
+            bounds=self.bounds,
+            constraints=self._base_constraints(),
+            options={"ftol": 1e-9, "maxiter": 1000},
+        )
+
+        if not result.success:
+            raise OptimizationError(f"Min CVaR optimization failed: {result.message}")
+
+        out = self._format_result(result.x)
+        w_vec = np.array([out["weights"][t] for t in self.tickers], dtype=float)
+        out["cvar_daily"] = float(empirical_cvar(w_vec))
+        return out
+
     def _max_feasible_return(self) -> float:
-        if not self.allow_short:
+        if not self.allow_short and self.max_weight >= 1.0:
             return float(np.max(self.mean_returns))
         res = minimize(
             lambda w: -portfolio_return(w, self.mean_returns),

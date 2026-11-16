@@ -17,7 +17,11 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.data.fetcher import StockDataFetcher  # noqa: E402
-from src.portfolio.advanced_models import BlackLittermanModel, RiskParityOptimizer  # noqa: E402
+from src.portfolio.advanced_models import (  # noqa: E402
+    BlackLittermanModel,
+    HierarchicalRiskParityOptimizer,
+    RiskParityOptimizer,
+)
 from src.portfolio.garch_model import GARCHVolatilityModel  # noqa: E402
 from src.portfolio.metrics import (  # noqa: E402
     DEFAULT_TICKERS,
@@ -43,6 +47,8 @@ def compute_dashboard_analytics(
     initial_weights_mode: Literal["equal", "cash"] = "equal",
     use_garch: bool = False,
     bl_view: dict | None = None,
+    max_weight: float = 1.0,
+    dist: Literal["normal", "t"] = "normal",
 ) -> dict:
     """
     Run the end-to-end dashboard analytics pipeline using consistent sorted ticker alignment.
@@ -51,9 +57,10 @@ def compute_dashboard_analytics(
     n_assets = len(active_tickers)
 
     if use_garch:
+        garch_dist: Literal["Normal", "t"] = "t" if dist == "t" else "Normal"
         forecasted_vols = []
         for ticker in active_tickers:
-            garch = GARCHVolatilityModel(log_returns[ticker])
+            garch = GARCHVolatilityModel(log_returns[ticker], dist=garch_dist)
             garch.fit()
             forecasted_vols.append(garch.forecast_volatility(horizon=TRADING_DAYS_PER_YEAR))
         corr_matrix = log_returns.corr().to_numpy(dtype=float)
@@ -93,17 +100,20 @@ def compute_dashboard_analytics(
         cov_method=cov_method,
         mean_returns=mean_returns,
         cov_matrix=cov_matrix,
+        max_weight=max_weight,
     )
     init_weights = (
         np.full(n_assets, 1.0 / n_assets) if initial_weights_mode == "equal" else np.zeros(n_assets)
     )
     max_sharpe = ef.optimize_max_sharpe(current_weights=init_weights, transaction_cost=tc_rate)
     min_var = ef.optimize_min_variance()
+    min_cvar = ef.optimize_min_cvar()
     random_portfolios = ef.get_random_portfolios(n=5000)
     frontier = ef.generate_frontier(n_points=100)
 
     rp = RiskParityOptimizer(cov_matrix, active_tickers)
     res_rp = rp.optimize()
+    res_hrp = HierarchicalRiskParityOptimizer(log_returns, cov_matrix=cov_matrix).optimize()
 
     weights_arr = np.array([max_sharpe["weights"][t] for t in active_tickers], dtype=float)
     sim = MonteCarloSimulator(
@@ -113,7 +123,10 @@ def compute_dashboard_analytics(
         cov_matrix_annual=cov_matrix,
     )
     paths = sim.simulate_price_paths(
-        n_simulations=500, n_days=TRADING_DAYS_PER_YEAR, antithetic=True
+        n_simulations=500,
+        n_days=TRADING_DAYS_PER_YEAR,
+        antithetic=True,
+        dist=dist,
     )
     stats = sim.get_path_statistics(paths)
     var_cvar = sim.compute_var_cvar(paths)
@@ -124,9 +137,11 @@ def compute_dashboard_analytics(
         "cov_matrix": cov_matrix,
         "max_sharpe": max_sharpe,
         "min_var": min_var,
+        "min_cvar": min_cvar,
         "random_portfolios": random_portfolios,
         "frontier": frontier,
         "risk_parity": res_rp,
+        "hrp": res_hrp,
         "paths": paths,
         "path_stats": stats,
         "var_cvar": var_cvar,
@@ -139,7 +154,7 @@ def main() -> None:
     st.title("AlphaIDX: Institutional Quant Engine")
     st.markdown(
         "Real-time IDX portfolio optimization using **Mean-Variance** (Sample or Ledoit-Wolf shrinkage), "
-        "**Risk Parity**, **Black-Litterman**, **GARCH(1,1)**, and **Antithetic GBM Monte Carlo**."
+        "**Min CVaR**, **Risk Parity & HRP**, **Black-Litterman**, **GARCH(1,1)**, and **Antithetic GBM Monte Carlo**."
     )
 
     st.sidebar.header("Market Data Config")
@@ -178,6 +193,20 @@ def main() -> None:
         ),
     )
     allow_short = st.sidebar.checkbox("Allow Short Selling", value=False)
+    max_weight_pct = st.sidebar.slider(
+        "Max Weight per Asset (%)",
+        min_value=20,
+        max_value=100,
+        value=100,
+        step=5,
+        disabled=allow_short,
+    )
+    max_weight = max_weight_pct / 100.0
+    dist_choice: Literal["normal", "t"] = st.sidebar.selectbox(
+        "Return Innovation Distribution",
+        options=["normal", "t"],
+        format_func=lambda d: "Student-t (Fat-Tailed)" if d == "t" else "Gaussian (Normal)",
+    )
     apply_tc = st.sidebar.checkbox("Apply Transaction Costs (10 bps turnover)", value=False)
     tc_rate = 0.001 if apply_tc else 0.0
     init_mode: Literal["equal", "cash"] = "equal"
@@ -239,11 +268,14 @@ def main() -> None:
                         initial_weights_mode=init_mode,
                         use_garch=use_garch,
                         bl_view=bl_view,
+                        max_weight=max_weight,
+                        dist=dist_choice,
                     )
 
                     active_tickers = results["active_tickers"]
                     max_sharpe = results["max_sharpe"]
                     min_var = results["min_var"]
+                    min_cvar = results["min_cvar"]
 
                     col1, col2 = st.columns(2)
                     with col1:
@@ -281,7 +313,8 @@ def main() -> None:
 
                     st.subheader("Execution Summary")
                     summary_df = pd.DataFrame(
-                        [max_sharpe, min_var], index=["Max Sharpe", "Min Variance"]
+                        [max_sharpe, min_var, min_cvar],
+                        index=["Max Sharpe", "Min Variance", "Min CVaR (95%)"],
                     )[["return", "volatility", "sharpe"]]
                     summary_df["return"] = summary_df["return"].apply(lambda x: f"{x:.2%}")
                     summary_df["volatility"] = summary_df["volatility"].apply(lambda x: f"{x:.2%}")

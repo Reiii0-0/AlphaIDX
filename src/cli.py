@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from src.data.fetcher import StockDataFetcher
-from src.portfolio.advanced_models import RiskParityOptimizer
+from src.portfolio.advanced_models import HierarchicalRiskParityOptimizer, RiskParityOptimizer
 from src.portfolio.backtester import Backtester
 from src.portfolio.garch_model import GARCHVolatilityModel
 from src.portfolio.metrics import (
@@ -67,6 +67,13 @@ def _validate_args(args: argparse.Namespace) -> list[str]:
         raise ValueError("--transaction-cost must be >= 0.")
     if args.rf < 0:
         raise ValueError("--rf must be >= 0.")
+    if not (0.0 < args.max_weight <= 1.0):
+        raise ValueError("--max-weight must be in (0, 1].")
+    if not args.allow_short and args.max_weight * len(tickers) < 1.0 - 1e-9:
+        raise ValueError(
+            f"--max-weight ({args.max_weight}) is infeasible for {len(tickers)} assets "
+            f"(minimum feasible is {1.0 / len(tickers):.4f})."
+        )
 
     if args.command == "run":
         if bool(args.oos_start) != bool(args.oos_end):
@@ -102,11 +109,13 @@ def _estimate_cov(
     log_returns: pd.DataFrame,
     cov_method: str,
     use_garch: bool,
+    dist: str = "normal",
 ) -> np.ndarray:
     if use_garch:
+        garch_dist = "t" if dist == "t" else "Normal"
         vols = []
         for col in log_returns.columns:
-            garch = GARCHVolatilityModel(log_returns[col])
+            garch = GARCHVolatilityModel(log_returns[col], dist=garch_dist)
             garch.fit()
             vols.append(garch.forecast_volatility(horizon=TRADING_DAYS_PER_YEAR))
         corr = log_returns.corr().to_numpy(dtype=float)
@@ -118,12 +127,15 @@ def _estimate_cov(
 
 
 def _clean_portfolio(res: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out = {
         "return": round(float(res["return"]), 6),
         "volatility": round(float(res["volatility"]), 6),
         "sharpe": round(float(res["sharpe"]), 4),
         "weights": {k: round(float(v), 6) for k, v in res["weights"].items()},
     }
+    if "cvar_daily" in res:
+        out["cvar_daily"] = round(float(res["cvar_daily"]), 6)
+    return out
 
 
 def _clean_backtest(res: dict[str, Any]) -> dict[str, Any]:
@@ -172,7 +184,7 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
     log_rets = fetcher.to_log_returns(prices, min_trading_days=60)
     active_tickers = list(log_rets.columns)
 
-    cov_matrix = _estimate_cov(log_rets, args.cov_method, args.garch)
+    cov_matrix = _estimate_cov(log_rets, args.cov_method, args.garch, dist=args.dist)
     mean_returns = log_rets.mean().to_numpy(dtype=float) * TRADING_DAYS_PER_YEAR
 
     ef = EfficientFrontier(
@@ -182,11 +194,14 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
         cov_method=args.cov_method,
         mean_returns=mean_returns,
         cov_matrix=cov_matrix,
+        max_weight=args.max_weight,
     )
     max_sharpe = ef.optimize_max_sharpe()
     min_var = ef.optimize_min_variance()
+    min_cvar = ef.optimize_min_cvar()
 
     rp = RiskParityOptimizer(cov_matrix, active_tickers).optimize()
+    hrp = HierarchicalRiskParityOptimizer(log_rets, cov_matrix=cov_matrix).optimize()
     ms_weights = np.array([max_sharpe["weights"][t] for t in active_tickers], dtype=float)
     sim = MonteCarloSimulator(
         log_rets,
@@ -198,6 +213,7 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
         n_simulations=args.n_sims,
         n_days=TRADING_DAYS_PER_YEAR,
         antithetic=True,
+        dist=args.dist,
     )
     var_cvar = sim.compute_var_cvar(paths)
 
@@ -212,14 +228,21 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
             "cov_method": args.cov_method,
             "garch": args.garch,
             "allow_short": args.allow_short,
+            "max_weight": args.max_weight,
+            "dist": args.dist,
             "n_sims": args.n_sims,
             "trading_days": int(len(log_rets)),
         },
         "max_sharpe": _clean_portfolio(max_sharpe),
         "min_variance": _clean_portfolio(min_var),
+        "min_cvar": _clean_portfolio(min_cvar),
         "risk_parity": {
             "volatility": round(float(rp["volatility"]), 6),
             "weights": {k: round(float(v), 6) for k, v in rp["weights"].items()},
+        },
+        "hrp": {
+            "volatility": round(float(hrp["volatility"]), 6),
+            "weights": {k: round(float(v), 6) for k, v in hrp["weights"].items()},
         },
         "monte_carlo_1y": {k: round(float(v), 6) for k, v in var_cvar.items()},
     }
@@ -241,10 +264,29 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
             transaction_cost=args.transaction_cost,
             allow_short=args.allow_short,
             risk_free_rate=args.rf,
+            max_weight=args.max_weight,
         )
         wf_mv = bt.run_walk_forward(
             rebalance_freq=args.rebalance_freq,
             strategy="min_variance",
+            cov_method=args.cov_method,
+            transaction_cost=args.transaction_cost,
+            allow_short=args.allow_short,
+            risk_free_rate=args.rf,
+            max_weight=args.max_weight,
+        )
+        wf_mc = bt.run_walk_forward(
+            rebalance_freq=args.rebalance_freq,
+            strategy="min_cvar",
+            cov_method=args.cov_method,
+            transaction_cost=args.transaction_cost,
+            allow_short=args.allow_short,
+            risk_free_rate=args.rf,
+            max_weight=args.max_weight,
+        )
+        wf_hrp = bt.run_walk_forward(
+            rebalance_freq=args.rebalance_freq,
+            strategy="hrp",
             cov_method=args.cov_method,
             transaction_cost=args.transaction_cost,
             allow_short=args.allow_short,
@@ -261,6 +303,8 @@ def _run_pipeline(args: argparse.Namespace, tickers: list[str]) -> dict[str, Any
             ),
             "walk_forward_max_sharpe": _clean_backtest(wf_ms),
             "walk_forward_min_variance": _clean_backtest(wf_mv),
+            "walk_forward_min_cvar": _clean_backtest(wf_mc),
+            "walk_forward_hrp": _clean_backtest(wf_hrp),
             "benchmark_equal_weight_cum_return": round(
                 float(bt.get_benchmark_performance().iloc[-1]), 6
             ),
@@ -285,6 +329,7 @@ def _run_backtest_command(args: argparse.Namespace, tickers: list[str]) -> dict[
         allow_short=args.allow_short,
         risk_free_rate=args.rf,
         cov_method=args.cov_method,
+        max_weight=args.max_weight,
     )
     max_sharpe = ef.optimize_max_sharpe()
     min_var = ef.optimize_min_variance()
@@ -300,11 +345,32 @@ def _run_backtest_command(args: argparse.Namespace, tickers: list[str]) -> dict[
         transaction_cost=args.transaction_cost,
         allow_short=args.allow_short,
         risk_free_rate=args.rf,
+        max_weight=args.max_weight,
     )
     wf_mv = bt.run_walk_forward(
         lookback_days=args.lookback_days,
         rebalance_freq=args.rebalance_freq,
         strategy="min_variance",
+        cov_method=args.cov_method,
+        transaction_cost=args.transaction_cost,
+        allow_short=args.allow_short,
+        risk_free_rate=args.rf,
+        max_weight=args.max_weight,
+    )
+    wf_mc = bt.run_walk_forward(
+        lookback_days=args.lookback_days,
+        rebalance_freq=args.rebalance_freq,
+        strategy="min_cvar",
+        cov_method=args.cov_method,
+        transaction_cost=args.transaction_cost,
+        allow_short=args.allow_short,
+        risk_free_rate=args.rf,
+        max_weight=args.max_weight,
+    )
+    wf_hrp = bt.run_walk_forward(
+        lookback_days=args.lookback_days,
+        rebalance_freq=args.rebalance_freq,
+        strategy="hrp",
         cov_method=args.cov_method,
         transaction_cost=args.transaction_cost,
         allow_short=args.allow_short,
@@ -324,6 +390,7 @@ def _run_backtest_command(args: argparse.Namespace, tickers: list[str]) -> dict[
             "lookback_days": args.lookback_days,
             "rebalance_freq": args.rebalance_freq,
             "cov_method": args.cov_method,
+            "max_weight": args.max_weight,
             "transaction_cost": args.transaction_cost,
             "risk_free_rate": args.rf,
         },
@@ -332,6 +399,8 @@ def _run_backtest_command(args: argparse.Namespace, tickers: list[str]) -> dict[
             "static_min_variance": _clean_backtest(static_mv),
             "walk_forward_max_sharpe": _clean_backtest(wf_ms),
             "walk_forward_min_variance": _clean_backtest(wf_mv),
+            "walk_forward_min_cvar": _clean_backtest(wf_mc),
+            "walk_forward_hrp": _clean_backtest(wf_hrp),
             "benchmark_equal_weight_cum_return": round(float(bench.iloc[-1]), 6),
         },
         "elapsed_seconds": round(time.perf_counter() - t0, 3),
@@ -350,6 +419,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     if payload["command"] == "run":
         ms = payload["max_sharpe"]
         mv = payload["min_variance"]
+        mc_opt = payload["min_cvar"]
         mc = payload["monte_carlo_1y"]
         lines += [
             "## Optimization",
@@ -358,6 +428,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "|---|---|---|---|",
             f"| Max Sharpe | {ms['return']:.2%} | {ms['volatility']:.2%} | {ms['sharpe']:.2f} |",
             f"| Min Variance | {mv['return']:.2%} | {mv['volatility']:.2%} | {mv['sharpe']:.2f} |",
+            f"| Min CVaR (95%) | {mc_opt['return']:.2%} | {mc_opt['volatility']:.2%} | {mc_opt['sharpe']:.2f} |",
             "",
             "## Monte Carlo (1Y)",
             "",
@@ -418,6 +489,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-short", action="store_true", help="Allow short weights (-0.5 to 1.0)."
     )
     common.add_argument(
+        "--max-weight",
+        type=float,
+        default=1.0,
+        help="Maximum long-only weight per asset in (0, 1] (default: 1.0).",
+    )
+    common.add_argument(
+        "--dist",
+        choices=["normal", "t"],
+        default="normal",
+        help="Innovation distribution for GARCH and Monte Carlo (default: normal).",
+    )
+    common.add_argument(
         "--transaction-cost",
         type=float,
         default=0.001,
@@ -446,8 +529,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python -m src.cli run --start 2019-01-01 --end 2024-12-31 --output-dir reports/\n"
-            "  python -m src.cli run --tickers BBCA.JK,BBRI.JK,TLKM.JK --garch --format json\n"
-            "  python -m src.cli backtest --end 2024-12-31 --oos-start 2025-01-01 --oos-end 2026-05-25\n"
+            "  python -m src.cli run --tickers BBCA.JK,BBRI.JK,TLKM.JK --garch --dist t --format json\n"
+            "  python -m src.cli backtest --max-weight 0.25 --oos-start 2025-01-01 --oos-end 2026-05-25\n"
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -455,12 +538,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = subparsers.add_parser(
         "run",
         parents=[common],
-        help="Run optimization, Risk Parity, Monte Carlo, and optional OOS backtest.",
+        help="Run optimization, Risk Parity, HRP, Monte Carlo, and optional OOS backtest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             "  python -m src.cli run --dry-run\n"
-            "  python -m src.cli run --cov-method ledoit_wolf --n-sims 2000 --format json\n"
+            "  python -m src.cli run --cov-method ledoit_wolf --max-weight 0.25 --dist t --format json\n"
             "  python -m src.cli run --oos-start 2025-01-01 --oos-end 2026-05-25 --output-dir reports/\n"
         ),
     )
@@ -484,7 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  python -m src.cli backtest --oos-start 2025-01-01 --oos-end 2026-05-25\n"
-            "  python -m src.cli backtest --rebalance-freq 63 --cov-method ledoit_wolf --format json\n"
+            "  python -m src.cli backtest --max-weight 0.25 --rebalance-freq 63 --format json\n"
         ),
     )
     bt_p.add_argument("--oos-start", default="2025-01-01", help="OOS start date (YYYY-MM-DD).")
@@ -523,6 +606,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "start": args.start,
             "end": args.end,
             "cov_method": args.cov_method,
+            "max_weight": args.max_weight,
+            "dist": args.dist,
             "risk_free_rate": args.rf,
             "output_dir": str(args.output_dir) if args.output_dir else None,
         }

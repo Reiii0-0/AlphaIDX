@@ -78,24 +78,32 @@ class MonteCarloSimulator:
 
         self.rng = np.random.default_rng(random_seed)
 
+    def _draw_innovations(
+        self,
+        rows: int,
+        cols: int,
+        dist: str,
+        df: float,
+    ) -> np.ndarray:
+        if dist == "normal":
+            return self.rng.standard_normal((rows, cols))
+        if dist == "t":
+            if df <= 2.0:
+                raise ValueError("Student-t degrees of freedom (df) must be > 2.0.")
+            return self.rng.standard_t(df, size=(rows, cols)) * np.sqrt((df - 2.0) / df)
+        raise ValueError(f"Unsupported distribution: {dist}")
+
     def simulate_price_paths(
         self,
         n_simulations: int = N_SIMULATION_PATHS,
         n_days: int = SIMULATION_DAYS,
         initial_value: float = 100.0,
         antithetic: bool = True,
+        dist: str = "normal",
+        df: float = 4.0,
     ) -> np.ndarray:
         """
-        Simulate price paths using GBM with Ito correction and optional antithetic variates.
-
-        Args:
-            n_simulations (int): Number of paths to simulate.
-            n_days (int): Number of trading days to project.
-            initial_value (float): Starting portfolio value.
-            antithetic (bool): Pair Z and -Z draws to reduce Monte Carlo variance.
-
-        Returns:
-            np.ndarray: Simulated paths, shape (n_simulations, n_days + 1).
+        Simulate price paths using GBM with Ito correction, optional antithetic variates, and normal/t innovations.
         """
         if n_simulations < 1 or n_days < 1:
             raise ValueError("n_simulations and n_days must be >= 1.")
@@ -104,19 +112,19 @@ class MonteCarloSimulator:
 
         if antithetic and n_simulations >= 2:
             half = n_simulations // 2
-            z_half = self.rng.standard_normal((half, n_days))
+            z_half = self._draw_innovations(half, n_days, dist, df)
             z = np.vstack([z_half, -z_half])
             if n_simulations % 2 == 1:
-                z = np.vstack([z, self.rng.standard_normal((1, n_days))])
+                z = np.vstack([z, self._draw_innovations(1, n_days, dist, df)])
         else:
-            z = self.rng.standard_normal((n_simulations, n_days))
+            z = self._draw_innovations(n_simulations, n_days, dist, df)
 
         log_ret = drift + self.sig_p_daily * z
         paths = initial_value * np.exp(np.cumsum(log_ret, axis=1))
         paths = np.hstack([np.full((n_simulations, 1), initial_value), paths])
 
         logger.info(
-            f"Simulated {n_simulations} paths for {n_days} days (antithetic={antithetic}). "
+            f"Simulated {n_simulations} paths for {n_days} days (antithetic={antithetic}, dist={dist}). "
             f"Ann. Return: {self.mu_p_daily * TRADING_DAYS_PER_YEAR:.2%}, "
             f"Ann. Vol: {self.sig_p_daily * np.sqrt(TRADING_DAYS_PER_YEAR):.2%}, "
             f"Drift: {drift:.6f}"

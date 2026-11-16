@@ -182,3 +182,18 @@ def test_custom_annual_estimates_and_validation(sample_mc_input):
         MonteCarloSimulator(df, weights, mean_returns_annual=np.array([0.1]))
     with pytest.raises(ValueError, match="zero"):
         MonteCarloSimulator(df, np.array([0.0, 0.0]))
+
+
+def test_simulate_price_paths_student_t(sample_mc_input):
+    df, weights = sample_mc_input
+    sim = MonteCarloSimulator(df, weights, random_seed=123)
+    paths = sim.simulate_price_paths(
+        n_simulations=500, n_days=60, antithetic=True, dist="t", df=4.0
+    )
+    assert paths.shape == (500, 61)
+    assert np.all(paths > 0)
+
+    with pytest.raises(ValueError, match="df"):
+        sim.simulate_price_paths(n_simulations=50, n_days=10, dist="t", df=2.0)
+    with pytest.raises(ValueError, match="Unsupported dist"):
+        sim.simulate_price_paths(n_simulations=50, n_days=10, dist="laplace")

@@ -50,12 +50,17 @@ def test_dashboard_pipeline_with_garch_propagation(dashboard_log_returns):
     res_garch = compute_dashboard_analytics(
         log_returns=dashboard_log_returns,
         use_garch=True,
+        max_weight=0.5,
+        dist="t",
     )
     assert res_garch["cov_matrix"].shape == (3, 3)
     assert np.allclose(res_garch["cov_matrix"], res_garch["cov_matrix"].T)
     assert np.all(np.linalg.eigvalsh(res_garch["cov_matrix"]) > 0)
     assert not np.allclose(res_garch["cov_matrix"], res_sample["cov_matrix"])
     assert not np.allclose(res_garch["paths"], res_sample["paths"])
+    assert all(w <= 0.5 + 1e-5 for w in res_garch["max_sharpe"]["weights"].values())
+    assert "min_cvar" in res_garch
+    assert "hrp" in res_garch
     assert res_garch["var_cvar"]["cvar_pct"] >= res_garch["var_cvar"]["var_pct"]
     assert (
         res_garch["var_cvar"]["percentile_5"]

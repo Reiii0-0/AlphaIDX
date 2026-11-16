@@ -69,3 +69,25 @@ def test_benchmark_performance_shape_and_values(synthetic_is_oos):
     assert len(bench) == len(oos_df)
     expected = float((np.exp(oos_df.cumsum()).iloc[-1].mean()) - 1.0)
     assert pytest.approx(bench.iloc[-1], rel=1e-9) == expected
+
+
+def test_walk_forward_min_cvar_and_hrp_strategies(synthetic_is_oos):
+    is_df, oos_df = synthetic_is_oos
+    bt = Backtester(is_df, oos_df)
+
+    wf_cvar = bt.run_walk_forward(
+        lookback_days=200,
+        rebalance_freq=63,
+        strategy="min_cvar",
+        max_weight=0.6,
+    )
+    wf_hrp = bt.run_walk_forward(
+        lookback_days=200,
+        rebalance_freq=63,
+        strategy="hrp",
+    )
+
+    assert len(wf_cvar["cumulative_returns"]) == len(oos_df)
+    assert len(wf_hrp["cumulative_returns"]) == len(oos_df)
+    assert wf_cvar["rebalances"] == 3
+    assert wf_hrp["rebalances"] == 3

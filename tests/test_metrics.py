@@ -99,3 +99,23 @@ def test_max_drawdown_recovery():
     # MDD = -0.2
     cum_rets = np.array([1.0, 0.8, 1.1, 0.9])
     assert pytest.approx(max_drawdown(cum_rets)) == -0.2
+
+
+def test_portfolio_var_cvar_student_t_heavier_tail():
+    weights = np.array([1.0])
+    mean_returns = np.array([0.08])
+    cov_matrix = np.array([[0.04]])  # vol = 0.20
+
+    var_norm = portfolio_var(weights, mean_returns, cov_matrix, confidence=0.99, dist="normal")
+    var_t = portfolio_var(weights, mean_returns, cov_matrix, confidence=0.99, dist="t", df=4.0)
+    cvar_norm = portfolio_cvar(weights, mean_returns, cov_matrix, confidence=0.99, dist="normal")
+    cvar_t = portfolio_cvar(weights, mean_returns, cov_matrix, confidence=0.99, dist="t", df=4.0)
+
+    assert var_t > var_norm
+    assert cvar_t > cvar_norm
+    assert cvar_t > var_t
+
+    with pytest.raises(ValueError, match="df"):
+        portfolio_var(weights, mean_returns, cov_matrix, dist="t", df=2.0)
+    with pytest.raises(ValueError, match="df"):
+        portfolio_cvar(weights, mean_returns, cov_matrix, dist="t", df=1.5)

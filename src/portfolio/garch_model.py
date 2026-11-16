@@ -3,6 +3,7 @@ GARCH(1,1) Volatility Modeling.
 """
 
 import logging
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -18,16 +19,19 @@ class GARCHVolatilityModel:
     Fits a GARCH(1,1) model to portfolio returns to forecast volatility.
     """
 
-    def __init__(self, log_returns: pd.Series):
+    def __init__(self, log_returns: pd.Series, dist: Literal["Normal", "t"] = "Normal"):
         """
         Initialize the GARCH model.
 
         Args:
             log_returns (pd.Series): Historical daily log returns of the portfolio or asset.
+            dist (Literal["Normal", "t"]): Innovation distribution ('Normal' or Student-'t').
         """
-        self.returns = log_returns * 100  # arch_model prefers scaled up data (percentages)
-        # Using Zero mean, since daily returns are close to zero, and GARCH(1,1) for variance
-        self.model = arch_model(self.returns, vol="Garch", p=1, q=1, mean="Zero", dist="Normal")
+        if dist not in ("Normal", "t"):
+            raise ValueError(f"Unsupported GARCH distribution: {dist}")
+        self.dist = dist
+        self.returns = log_returns * 100
+        self.model = arch_model(self.returns, vol="Garch", p=1, q=1, mean="Zero", dist=dist)
         self.fit_result = None
 
     def fit(self) -> None:

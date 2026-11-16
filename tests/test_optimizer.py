@@ -180,3 +180,31 @@ def test_frontier_allow_short_and_update_estimates(sample_returns):
     ef.update_estimates(mean_returns=new_means)
     assert ef._frontier_cache is None
     assert np.allclose(ef.mean_returns, new_means)
+
+
+def test_max_weight_cap_and_validation(sample_returns):
+    ef = EfficientFrontier(sample_returns, max_weight=0.45)
+    ms = ef.optimize_max_sharpe()
+    mv = ef.optimize_min_variance()
+    assert all(w <= 0.45 + 1e-6 for w in ms["weights"].values())
+    assert all(w <= 0.45 + 1e-6 for w in mv["weights"].values())
+    assert pytest.approx(sum(ms["weights"].values())) == 1.0
+
+    frontier = ef.generate_frontier(n_points=15)
+    assert len(frontier) >= 10
+    for pt in frontier:
+        assert all(w <= 0.45 + 1e-5 for w in pt["weights"].values())
+
+    # 3 assets with max_weight=0.2 cannot sum to 1.0.
+    with pytest.raises(ValueError, match="max_weight"):
+        EfficientFrontier(sample_returns, max_weight=0.2)
+
+
+def test_optimize_min_cvar(sample_returns):
+    ef = EfficientFrontier(sample_returns, max_weight=0.6)
+    res = ef.optimize_min_cvar(confidence=0.95)
+    assert "weights" in res
+    assert "cvar_daily" in res
+    assert res["cvar_daily"] > 0.0
+    assert pytest.approx(sum(res["weights"].values())) == 1.0
+    assert all(-1e-6 <= w <= 0.6 + 1e-6 for w in res["weights"].values())

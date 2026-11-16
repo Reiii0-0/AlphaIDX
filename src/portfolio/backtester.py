@@ -8,6 +8,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from src.portfolio.advanced_models import HierarchicalRiskParityOptimizer
 from src.portfolio.metrics import (
     RISK_FREE_RATE_ANNUAL,
     TRADING_DAYS_PER_YEAR,
@@ -96,10 +97,11 @@ class Backtester:
         self,
         lookback_days: int = TRADING_DAYS_PER_YEAR,
         rebalance_freq: int = 63,
-        strategy: Literal["max_sharpe", "min_variance"] = "max_sharpe",
+        strategy: Literal["max_sharpe", "min_variance", "min_cvar", "hrp"] = "max_sharpe",
         cov_method: Literal["sample", "ledoit_wolf"] = "ledoit_wolf",
         transaction_cost: float = 0.001,
         allow_short: bool = False,
+        max_weight: float = 1.0,
         risk_free_rate: float = RISK_FREE_RATE_ANNUAL,
         label: str | None = None,
     ) -> dict:
@@ -125,21 +127,27 @@ class Backtester:
                 hist_start = max(0, hist_end - lookback_days)
                 window = full_log_rets.iloc[hist_start:hist_end]
 
-                ef = EfficientFrontier(
-                    window,
-                    allow_short=allow_short,
-                    risk_free_rate=risk_free_rate,
-                    cov_method=cov_method,
-                )
-                if strategy == "max_sharpe":
-                    res = ef.optimize_max_sharpe(
-                        current_weights=current_weights if t > 0 else None,
-                        transaction_cost=transaction_cost if t > 0 else 0.0,
-                    )
-                elif strategy == "min_variance":
-                    res = ef.optimize_min_variance()
+                if strategy == "hrp":
+                    res = HierarchicalRiskParityOptimizer(window).optimize()
                 else:
-                    raise ValueError(f"Unsupported strategy: {strategy}")
+                    ef = EfficientFrontier(
+                        window,
+                        allow_short=allow_short,
+                        risk_free_rate=risk_free_rate,
+                        cov_method=cov_method,
+                        max_weight=max_weight,
+                    )
+                    if strategy == "max_sharpe":
+                        res = ef.optimize_max_sharpe(
+                            current_weights=current_weights if t > 0 else None,
+                            transaction_cost=transaction_cost if t > 0 else 0.0,
+                        )
+                    elif strategy == "min_variance":
+                        res = ef.optimize_min_variance()
+                    elif strategy == "min_cvar":
+                        res = ef.optimize_min_cvar()
+                    else:
+                        raise ValueError(f"Unsupported strategy: {strategy}")
 
                 target_weights = np.array([res["weights"][tk] for tk in self.tickers], dtype=float)
                 turnover = float(np.sum(np.abs(target_weights - current_weights)))
