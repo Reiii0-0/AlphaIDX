@@ -3,10 +3,10 @@ Visualization module for portfolio analysis using Plotly.
 """
 
 import logging
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from scipy.stats import gaussian_kde, norm
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,9 @@ def plot_monte_carlo_portfolios(
             x=[max_sharpe["volatility"] * 100],
             y=[max_sharpe["return"] * 100],
             mode="markers",
-            marker=dict(color=COLOR_MAX_SHARPE, size=14, symbol="star", line=dict(width=2, color="black")),
+            marker=dict(
+                color=COLOR_MAX_SHARPE, size=14, symbol="star", line=dict(width=2, color="black")
+            ),
             name="Max Sharpe",
         )
     )
@@ -155,7 +157,9 @@ def plot_monte_carlo_portfolios(
             x=[min_var["volatility"] * 100],
             y=[min_var["return"] * 100],
             mode="markers",
-            marker=dict(color=COLOR_MIN_VAR, size=14, symbol="diamond", line=dict(width=2, color="black")),
+            marker=dict(
+                color=COLOR_MIN_VAR, size=14, symbol="diamond", line=dict(width=2, color="black")
+            ),
             name="Min Variance",
         )
     )
@@ -167,11 +171,15 @@ def plot_monte_carlo_portfolios(
         template=TEMPLATE,
         annotations=[
             dict(
-                x=0.05, y=0.95, xref="paper", yref="paper",
+                x=0.05,
+                y=0.95,
+                xref="paper",
+                yref="paper",
                 text="Color scale represents Sharpe Ratio (Green = Higher)",
-                showarrow=False, font=dict(size=12)
+                showarrow=False,
+                font=dict(size=12),
             )
-        ]
+        ],
     )
 
     return fig
@@ -260,12 +268,17 @@ def plot_price_paths(paths: np.ndarray, stats: pd.DataFrame, var_cvar: dict) -> 
         template=TEMPLATE,
         annotations=[
             dict(
-                x=n_days, y=var_cvar["percentile_5"],
-                xref="x", yref="y",
+                x=n_days,
+                y=var_cvar["percentile_5"],
+                xref="x",
+                yref="y",
                 text=f"5th pct (1yr): {var_cvar['percentile_5']:.1f}",
-                showarrow=True, arrowhead=2, ax=-100, ay=30
+                showarrow=True,
+                arrowhead=2,
+                ax=-100,
+                ay=30,
             )
-        ]
+        ],
     )
 
     return fig
@@ -276,7 +289,7 @@ def plot_return_distribution(log_returns: pd.DataFrame, optimal_weights: np.ndar
     Plot the distribution of portfolio log returns.
     """
     port_returns = log_returns @ optimal_weights
-    
+
     fig = go.Figure()
 
     # Histogram
@@ -287,7 +300,7 @@ def plot_return_distribution(log_returns: pd.DataFrame, optimal_weights: np.ndar
             name="Portfolio Returns",
             marker_color=COLOR_FRONTIER,
             opacity=0.6,
-            nbinsx=50
+            nbinsx=50,
         )
     )
 
@@ -296,11 +309,7 @@ def plot_return_distribution(log_returns: pd.DataFrame, optimal_weights: np.ndar
     kde = gaussian_kde(port_returns)
     fig.add_trace(
         go.Scatter(
-            x=x_range,
-            y=kde(x_range),
-            mode="lines",
-            line=dict(color="black", width=2),
-            name="KDE"
+            x=x_range, y=kde(x_range), mode="lines", line=dict(color="black", width=2), name="KDE"
         )
     )
 
@@ -312,20 +321,20 @@ def plot_return_distribution(log_returns: pd.DataFrame, optimal_weights: np.ndar
             y=norm.pdf(x_range, mu, std),
             mode="lines",
             line=dict(color="gray", width=2, dash="dash"),
-            name="Normal Dist."
+            name="Normal Dist.",
         )
     )
 
     # Metrics lines
     fig.add_vline(x=mu, line_color="green", annotation_text="Mean")
-    fig.add_vline(x=mu-std, line_dash="dot", line_color="orange", annotation_text="-1σ")
-    fig.add_vline(x=mu+std, line_dash="dot", line_color="orange", annotation_text="+1σ")
+    fig.add_vline(x=mu - std, line_dash="dot", line_color="orange", annotation_text="-1σ")
+    fig.add_vline(x=mu + std, line_dash="dot", line_color="orange", annotation_text="+1σ")
 
     fig.update_layout(
         title="Portfolio Return Distribution vs Normal Assumption",
         xaxis_title="Daily Log Return",
         yaxis_title="Density",
-        template=TEMPLATE
+        template=TEMPLATE,
     )
 
     return fig
@@ -336,13 +345,13 @@ def plot_weights_bar(max_sharpe: dict, min_var: dict, tickers: list[str]) -> go.
     Plot a bar chart comparing weights of two portfolios.
     """
     clean_tickers = [t.replace(".JK", "") for t in tickers]
-    
+
     # Sort by Max Sharpe weight descending
     ms_weights = [max_sharpe["weights"][t] for t in tickers]
     mv_weights = [min_var["weights"][t] for t in tickers]
-    
+
     sorted_indices = np.argsort(ms_weights)[::-1]
-    
+
     fig = go.Figure(
         data=[
             go.Bar(
@@ -370,7 +379,7 @@ def plot_weights_bar(max_sharpe: dict, min_var: dict, tickers: list[str]) -> go.
         yaxis_title="Weight (%)",
         yaxis_range=[0, 100],
         barmode="group",
-        template=TEMPLATE
+        template=TEMPLATE,
     )
 
     return fig
@@ -383,11 +392,11 @@ def plot_cumulative_returns(
     Plot cumulative returns of the portfolio vs individual assets.
     """
     log_returns = np.log(prices / prices.shift(1)).dropna()
-    
+
     # Portfolio cumulative
     port_log_ret = log_returns @ max_sharpe_weights
     port_cum = np.exp(port_log_ret.cumsum()) - 1
-    
+
     fig = go.Figure()
 
     # Individual assets
@@ -401,7 +410,7 @@ def plot_cumulative_returns(
                 line=dict(color="lightgray", width=1),
                 name=ticker.replace(".JK", ""),
                 legendgroup="Assets",
-                showlegend=True
+                showlegend=True,
             )
         )
 
@@ -412,7 +421,7 @@ def plot_cumulative_returns(
             y=port_cum * 100,
             mode="lines",
             line=dict(color=COLOR_FRONTIER, width=3),
-            name="Optimal Portfolio (Max Sharpe)"
+            name="Optimal Portfolio (Max Sharpe)",
         )
     )
 
@@ -421,23 +430,25 @@ def plot_cumulative_returns(
         xaxis_title="Date",
         yaxis_title="Cumulative Return (%)",
         template=TEMPLATE,
-        hovermode="x unified"
+        hovermode="x unified",
     )
-    
+
     # Add benchmark annotation
     final_ret = port_cum.iloc[-1] * 100
     fig.add_annotation(
-        x=port_cum.index[-1], y=final_ret,
+        x=port_cum.index[-1],
+        y=final_ret,
         text=f"Total: {final_ret:.1f}%",
-        showarrow=True, arrowhead=2, ax=-60, ay=-30
+        showarrow=True,
+        arrowhead=2,
+        ax=-60,
+        ay=-30,
     )
 
     return fig
 
 
-def plot_backtest_performance(
-    bt_results: list[dict], benchmark_cum: pd.Series
-) -> go.Figure:
+def plot_backtest_performance(bt_results: list[dict], benchmark_cum: pd.Series) -> go.Figure:
     """
     Plot Out-of-Sample realized performance comparison.
     """
@@ -477,19 +488,20 @@ def plot_backtest_performance(
 
     return fig
 
+
 def plot_risk_parity_contributions(risk_contributions: dict, tickers: list[str]) -> go.Figure:
     """
     Plot Risk Contributions of a portfolio.
     """
     clean_tickers = [t.replace(".JK", "") for t in tickers]
     rc_values = [risk_contributions[t] * 100 for t in tickers]
-    
+
     fig = go.Figure(
         data=[
             go.Bar(
                 x=clean_tickers,
                 y=rc_values,
-                marker_color="#8B5CF6", # Purple
+                marker_color="#8B5CF6",  # Purple
                 text=[f"{v:.1f}%" for v in rc_values],
                 textposition="auto",
             )
@@ -500,7 +512,7 @@ def plot_risk_parity_contributions(risk_contributions: dict, tickers: list[str])
         title="Marginal Risk Contributions (Risk Parity)",
         xaxis_title="Ticker",
         yaxis_title="Risk Contribution (%)",
-        template=TEMPLATE
+        template=TEMPLATE,
     )
 
     return fig

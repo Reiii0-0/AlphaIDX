@@ -8,12 +8,21 @@ All constants follow industry standards:
 """
 
 import logging
+import os
+from pathlib import Path
+
 import numpy as np
+from dotenv import load_dotenv
 from scipy.stats import norm
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
 __all__ = [
+    "PROJECT_ROOT",
+    "CACHE_DIR",
     "TRADING_DAYS_PER_YEAR",
     "RISK_FREE_RATE_ANNUAL",
     "RISK_FREE_RATE_DAILY",
@@ -32,15 +41,17 @@ __all__ = [
     "OptimizationError",
 ]
 
+CACHE_DIR = PROJECT_ROOT / "data" / "cache"
+
 # ── Time ──
 TRADING_DAYS_PER_YEAR = 252
 
 # ── Rates ──
-RISK_FREE_RATE_ANNUAL = 0.0625  # BI Rate ~6.25% as of 2024 (Indonesia)
+RISK_FREE_RATE_ANNUAL = float(os.getenv("RISK_FREE_RATE", "0.0625"))
 RISK_FREE_RATE_DAILY = RISK_FREE_RATE_ANNUAL / TRADING_DAYS_PER_YEAR
 
 # ── Defaults ──
-DEFAULT_TICKERS = [
+_DEFAULT_TICKERS_FALLBACK = [
     "BBCA.JK",
     "TLKM.JK",
     "BBRI.JK",
@@ -52,8 +63,14 @@ DEFAULT_TICKERS = [
     "KLBF.JK",
     "INDF.JK",
 ]
-DEFAULT_START_DATE = "2019-01-01"
-DEFAULT_END_DATE = "2024-12-31"  # 5 years, ~1260 trading days
+_env_tickers = os.getenv("DEFAULT_TICKERS", "").strip()
+DEFAULT_TICKERS = (
+    [t.strip() for t in _env_tickers.split(",") if t.strip()]
+    if _env_tickers
+    else _DEFAULT_TICKERS_FALLBACK
+)
+DEFAULT_START_DATE = os.getenv("START_DATE", "2019-01-01")
+DEFAULT_END_DATE = os.getenv("END_DATE", "2024-12-31")
 
 # ── Simulation ──
 N_PORTFOLIOS_MONTE_CARLO = 10_000
@@ -199,4 +216,5 @@ def max_drawdown(cumulative_returns: np.ndarray) -> float:
 
 class OptimizationError(ValueError):
     """Raised when scipy.optimize.minimize fails (result.success == False)."""
+
     pass

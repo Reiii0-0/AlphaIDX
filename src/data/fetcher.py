@@ -13,7 +13,7 @@ import pandas as pd
 import yfinance as yf
 
 from src.portfolio.metrics import (
-    RISK_FREE_RATE_ANNUAL,
+    CACHE_DIR,
     TRADING_DAYS_PER_YEAR,
     sharpe_ratio,
 )
@@ -28,7 +28,13 @@ class StockDataFetcher:
     Fetches and processes stock price data from yfinance.
     """
 
-    def __init__(self, tickers: list[str], start: str, end: str) -> None:
+    def __init__(
+        self,
+        tickers: list[str],
+        start: str,
+        end: str,
+        cache_dir: Path | None = None,
+    ) -> None:
         """
         Initialize the fetcher.
 
@@ -36,11 +42,12 @@ class StockDataFetcher:
             tickers (list[str]): List of stock tickers.
             start (str): Start date (YYYY-MM-DD).
             end (str): End date (YYYY-MM-DD).
+            cache_dir (Path | None): Optional cache directory override.
         """
         self.tickers = sorted(tickers)
         self.start = start
         self.end = end
-        self.cache_dir = Path("data/cache")
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else CACHE_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def fetch(self) -> pd.DataFrame:
@@ -67,38 +74,48 @@ class StockDataFetcher:
         if raw.empty:
             raise ValueError("No data downloaded from yfinance.")
 
-        # Extract Adjusted Close (yfinance auto_adjust=True makes "Close" adjusted)
         if isinstance(raw.columns, pd.MultiIndex):
             prices = raw["Close"]
         else:
             prices = raw[["Close"]]
             prices.columns = self.tickers
 
-        # Ensure all requested tickers are columns
-        prices = prices[self.tickers]
+        available = [t for t in self.tickers if t in prices.columns]
+        prices = prices[available]
 
         prices = self._validate_prices(prices)
         self._save_to_cache(prices)
 
         return prices
 
-    def to_log_returns(self, prices: pd.DataFrame) -> pd.DataFrame:
+    def to_log_returns(
+        self,
+        prices: pd.DataFrame,
+        min_trading_days: int = 200,
+    ) -> pd.DataFrame:
         """
-        Convert price data to log returns.
+        Convert price data to daily log returns with explicit boundary checks.
 
         Args:
             prices (pd.DataFrame): Stock prices.
+            min_trading_days (int): Minimum required return rows.
 
         Returns:
             pd.DataFrame: Log returns.
+
+        Raises:
+            ValueError: If returns contain NaNs, too few rows, or extreme daily moves.
         """
-        # r_t = ln(P_t / P_{t-1})
         log_returns = np.log(prices / prices.shift(1)).dropna()
 
-        # Validate output
-        assert not log_returns.isnull().any().any(), "NaN in log returns"
-        assert log_returns.shape[0] > 252, "Less than 1 year of data"
-        assert (log_returns.abs() < 0.5).all().all(), "Suspiciously large daily returns (>50%)"
+        if log_returns.isnull().any().any():
+            raise ValueError("NaN values found in computed log returns.")
+        if log_returns.shape[0] < min_trading_days:
+            raise ValueError(
+                f"Insufficient trading days: got {log_returns.shape[0]}, need at least {min_trading_days}."
+            )
+        if not (log_returns.abs() < 0.5).all().all():
+            raise ValueError("Suspiciously large daily log returns (>= 50%) detected.")
 
         return log_returns
 
@@ -146,11 +163,9 @@ class StockDataFetcher:
         logger.info(f"Saved to cache: {cache_file}")
 
     def _validate_prices(self, prices: pd.DataFrame) -> pd.DataFrame:
-        """Apply data quality rules from DATA.md."""
-        # Step 1: forward fill gaps of up to 3 consecutive days
+        """Forward-fill short gaps (<=3 days), drop >5% NaN tickers, and drop remaining NaN rows."""
         prices = prices.ffill(limit=3)
 
-        # Step 2: drop tickers with >5% NaN
         nan_pct = prices.isna().mean()
         bad_tickers = nan_pct[nan_pct > 0.05].index.tolist()
 
@@ -161,7 +176,4 @@ class StockDataFetcher:
         if prices.shape[1] < 2:
             raise ValueError("Fewer than 2 valid tickers remain after quality check.")
 
-        # Step 3: drop remaining NaN rows
-        prices = prices.dropna()
-        
-        return prices
+        return prices.dropna()
